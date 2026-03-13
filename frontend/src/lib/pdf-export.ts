@@ -79,32 +79,49 @@ function fmtDate(date?: string, year?: number): string {
   return '—';
 }
 
-/** Render an HTML string into a full-content canvas (may be taller than A4). */
+/**
+ * Render an HTML string into a full-content canvas (may be taller than A4).
+ *
+ * Uses an isolated <iframe> so html2canvas only sees our clean inline styles
+ * and does NOT parse the parent page's Tailwind CSS 4 stylesheet — which uses
+ * modern color functions (lab(), oklch()) that html2canvas v1.4.x cannot parse.
+ */
 async function htmlToCanvas(html: string, widthPx: number): Promise<HTMLCanvasElement> {
-  const wrapper = document.createElement('div');
-  wrapper.style.cssText = [
-    'position:fixed',
-    'left:-99999px',
-    'top:0',
-    `width:${widthPx}px`,
-    'background:#ffffff',
-    'box-sizing:border-box',
-    // Inject a base font so html2canvas picks it up
-    'font-family:Arial,Helvetica,sans-serif',
-    'font-size:14px',
-    'color:#1c1917',
-  ].join(';');
-  wrapper.innerHTML = html;
-  document.body.appendChild(wrapper);
+  const iframe = document.createElement('iframe');
+  iframe.style.cssText = `position:fixed;left:-99999px;top:0;width:${widthPx}px;height:200px;border:none;pointer-events:none;`;
+  document.body.appendChild(iframe);
 
-  // Let the browser lay out the content
-  await new Promise<void>((r) => setTimeout(r, 80));
-
-  const fullH = wrapper.scrollHeight;
   try {
-    return await html2canvas(wrapper, {
+    const doc = iframe.contentDocument!;
+    doc.open();
+    doc.write(`<!DOCTYPE html><html><head>
+      <meta charset="utf-8"/>
+      <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+          background: #ffffff;
+          font-family: Arial, Helvetica, sans-serif;
+          font-size: 14px;
+          color: #1c1917;
+          width: ${widthPx}px;
+        }
+      </style>
+    </head><body>${html}</body></html>`);
+    doc.close();
+
+    // Wait for the iframe to lay out its content
+    await new Promise<void>((r) => setTimeout(r, 150));
+
+    const fullH = doc.body.scrollHeight;
+    iframe.style.height = `${fullH}px`;
+
+    // One more tick for resize to propagate
+    await new Promise<void>((r) => setTimeout(r, 50));
+
+    return await html2canvas(doc.body, {
       scale: HTML2CANVAS_SCALE,
-      useCORS: true,
+      useCORS: false,
+      allowTaint: true,
       logging: false,
       backgroundColor: '#ffffff',
       width: widthPx,
@@ -113,7 +130,7 @@ async function htmlToCanvas(html: string, widthPx: number): Promise<HTMLCanvasEl
       windowHeight: fullH,
     });
   } finally {
-    document.body.removeChild(wrapper);
+    document.body.removeChild(iframe);
   }
 }
 
