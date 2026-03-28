@@ -68,11 +68,11 @@ import { toast } from 'sonner';
 // Constants
 // ═══════════════════════════════════════════════════════════════════════════
 
-//const NODE_WIDTH = 180;
-//const NODE_HEIGHT = 85;
-//const LEVEL_HEIGHT = 250;
-//const SIBLING_GAP = 60;
-//const BRANCH_GAP = 100; // wider gap between siblings whose subtrees have children
+const NODE_WIDTH = 160;
+const NODE_HEIGHT = 100;
+const LEVEL_HEIGHT = 165;
+const SIBLING_GAP = 20;
+const BRANCH_GAP = 60; // wider gap between siblings whose subtrees have children
 const MINIMAP_WIDTH = 160;
 const MINIMAP_HEIGHT = 100;
 
@@ -253,30 +253,23 @@ interface TreeConnectionProps {
 
 // TÌM ĐOẠN NÀY (Khoảng dòng 250) VÀ THAY THẾ:
 function TreeConnection({ connection }: TreeConnectionProps) {
-  const { x1, y1, x2, y2, type, color, wifeIndex } = connection as any;
+  const { x1, y1, x2, y2, type, color, isWife1 } = connection as any;
 
   if (type === 'couple') {
-    return <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="#f472b6" strokeWidth={2} strokeDasharray="4 2" />;
+    return <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="#f472b6" strokeWidth={2} />;
   }
 
-  // Độ dày giảm dần
-  let lineWidth = 1.2;
-  if (wifeIndex === 0) lineWidth = 5;
-  else if (wifeIndex === 1) lineWidth = 2.5;
-  else if (wifeIndex === 2) lineWidth = 1;
+  // Cấu hình màu sắc từ Bước 2 và độ dày theo yêu cầu
+  const lineColor = color || "#9ca3af";
+  const lineWidth = isWife1 ? 3 : 1.5; 
 
-  // ĐIỂM GẬP: Cho đường kẻ đi xuống 50px từ đáy ô mẹ rồi mới rẽ ngang
-  // Việc này giúp đường kẻ không bao giờ dính vào ô của đời F dưới
-  const midY = y1 + 50; 
-
+  const midY = y1 + (y2 - y1) / 2;
   return (
     <path
       d={`M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`}
       fill="none"
-      stroke={color || "#94a3b8"}
+      stroke={lineColor}
       strokeWidth={lineWidth}
-      strokeLinecap="round"
-      strokeLinejoin="round"
     />
   );
 }
@@ -372,13 +365,10 @@ function Minimap({ nodes, viewBox, treeWidth, treeHeight, onViewportClick }: Min
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Các hằng số điều chỉnh khoảng cách - Tăng lên để "tự động giãn"
-const NODE_WIDTH = 180;    // Chiều rộng ô (tăng lên để chứa tên dài)
-const NODE_HEIGHT = 90;    // Chiều cao ô
-const LEVEL_HEIGHT = 300;  // KHOẢNG CÁCH DỌC: Đẩy đời F xuống thấp để không dính ô cha mẹ
-const SIBLING_GAP = 80;    // Khoảng cách ngang tối thiểu giữa 2 anh em
-const BRANCH_GAP = 150;    // Khoảng cách giữa các chi (ví dụ chi bà Cả và chi bà Hai)
-const COUPLE_GAP = 40;     // Khoảng cách giữa chồng và các vợ
+// Tree Layout Builder — Hierarchical (Bottom-up subtree sizing)
+// ═══════════════════════════════════════════════════════════════════════════
+
+const COUPLE_GAP = 16;
 
 function buildTreeLayout(
   data: TreeData,
@@ -389,7 +379,7 @@ function buildTreeLayout(
 ) {
   const { people, families, children } = data;
 
-  // 1. Khởi tạo các bản đồ quan hệ (Maps)
+  // Build relationship maps
   const fatherToFamilies = new Map<string, typeof families>();
   const motherToFamilies = new Map<string, typeof families>();
   const childToFamily = new Map<string, (typeof families)[0]>();
@@ -411,200 +401,350 @@ function buildTreeLayout(
     }
   }
 
-  // 2. Xác định những người cần hiển thị (Logic lọc giữ nguyên của bạn)
+  // Visible people selection
   const getVisiblePeopleIds = (): Set<string> => {
     const visible = new Set<string>();
+
     if (filterRootId) {
+      // Branch filter: show filterRootId and all descendants (follows both father and mother families)
       const addWithDescendants = (personId: string) => {
         if (visible.has(personId)) return;
         visible.add(personId);
-        const fams = [...(fatherToFamilies.get(personId) || []), ...(motherToFamilies.get(personId) || [])];
+        const fams = [
+          ...(fatherToFamilies.get(personId) || []),
+          ...(motherToFamilies.get(personId) || []),
+        ];
         for (const fam of fams) {
           if (fam.father_id && fam.father_id !== personId) visible.add(fam.father_id);
           if (fam.mother_id && fam.mother_id !== personId) visible.add(fam.mother_id);
-          children.filter((c) => c.family_id === fam.id).forEach((c) => addWithDescendants(c.person_id));
+          children
+            .filter((c) => c.family_id === fam.id)
+            .forEach((c) => addWithDescendants(c.person_id));
         }
       };
       addWithDescendants(filterRootId);
       return visible;
     }
+
     if (viewMode === 'all') {
       people.forEach((p) => visible.add(p.id));
       const hideDescendants = (personId: string) => {
         const fams = fatherToFamilies.get(personId) || [];
         for (const fam of fams) {
-          children.filter((c) => c.family_id === fam.id).forEach((c) => {
-            visible.delete(c.person_id);
-            hideDescendants(c.person_id);
-          });
+          children
+            .filter((c) => c.family_id === fam.id)
+            .forEach((c) => {
+              visible.delete(c.person_id);
+              hideDescendants(c.person_id);
+            });
         }
       };
       collapsedNodes.forEach((nodeId) => hideDescendants(nodeId));
+    } else if (viewMode === 'ancestors' && focusPersonId) {
+      const addAncestors = (personId: string) => {
+        visible.add(personId);
+        const fam = childToFamily.get(personId);
+        if (fam?.father_id) addAncestors(fam.father_id);
+        if (fam?.mother_id) addAncestors(fam.mother_id);
+      };
+      addAncestors(focusPersonId);
+    } else if (viewMode === 'descendants' && focusPersonId) {
+      const addDescendants = (personId: string) => {
+        if (visible.has(personId)) return;
+        visible.add(personId);
+        const fams = [
+          ...(fatherToFamilies.get(personId) || []),
+          ...(motherToFamilies.get(personId) || []),
+        ];
+        for (const fam of fams) {
+          if (fam.father_id && fam.father_id !== personId) visible.add(fam.father_id);
+          if (fam.mother_id && fam.mother_id !== personId) visible.add(fam.mother_id);
+          children.filter((c) => c.family_id === fam.id).forEach((c) => addDescendants(c.person_id));
+        }
+      };
+      addDescendants(focusPersonId);
     } else {
       people.forEach((p) => visible.add(p.id));
     }
+
     return visible;
   };
 
   const visibleIds = getVisiblePeopleIds();
   const visiblePeople = people.filter((p) => visibleIds.has(p.id));
-  if (visiblePeople.length === 0) return { nodes: [], connections: [], width: 0, height: 0, offsetX: 0 };
 
-  // 3. Helper functions cho vị trí
+  if (visiblePeople.length === 0) {
+    return { nodes: [], connections: [], width: 0, height: 0, offsetX: 0 };
+  }
+
+  // Helpers
   const getVisibleChildrenAsFather = (personId: string): string[] => {
     const fams = fatherToFamilies.get(personId) || [];
     const result: string[] = [];
     for (const fam of fams) {
       children
-        .filter((c) => c.family_id === fam.id && visibleIds.has(c.person_id))
+        .filter((c) => c.family_id === fam.id && visibleIds.has(c.person_id) && !positionedAsWife.has(c.person_id))
         .sort((a, b) => a.sort_order - b.sort_order)
         .forEach((c) => { if (!result.includes(c.person_id)) result.push(c.person_id); });
     }
     return result;
   };
 
+  /** Returns all visible wives for a husband (supports polygamy). */
   const getVisibleWives = (personId: string): string[] => {
     const fams = fatherToFamilies.get(personId) || [];
-    return fams.map(f => f.mother_id).filter((id): id is string => !!id && visibleIds.has(id));
+    const wives: string[] = [];
+    for (const fam of fams) {
+      if (fam.mother_id && visibleIds.has(fam.mother_id)) {
+        wives.push(fam.mother_id);
+      }
+    }
+    return wives;
   };
 
-  // Đánh dấu ai là vợ để không tính họ là Root (gốc)
+  // Wives will be positioned adjacent to husband — mark them
   const positionedAsWife = new Set<string>();
   for (const p of visiblePeople) {
     if (p.gender === 2) {
       const fams = motherToFamilies.get(p.id) || [];
-      if (fams.some((f) => f.father_id && visibleIds.has(f.father_id))) positionedAsWife.add(p.id);
+      if (fams.some((f) => f.father_id && visibleIds.has(f.father_id))) {
+        positionedAsWife.add(p.id);
+      }
     }
   }
 
-  const roots = visiblePeople.filter(p => !positionedAsWife.has(p.id) && (!childToFamily.get(p.id)?.father_id || !visibleIds.has(childToFamily.get(p.id)!.father_id!))).map(p => p.id);
+  // Root nodes: not a wife, and no visible father
+  const roots: string[] = [];
+  for (const p of visiblePeople) {
+    if (positionedAsWife.has(p.id)) continue;
+    const parentFam = childToFamily.get(p.id);
+    if (!parentFam?.father_id || !visibleIds.has(parentFam.father_id)) {
+      roots.push(p.id);
+    }
+  }
 
-  // 4. TÍNH TOÁN ĐỘ RỘNG NHÁNH (Subtree Width) - Mấu chốt để tự động giãn
+  // Gap between adjacent siblings — larger when at least one has a visible subtree
+  const siblingGap = (childA: string, childB: string): number => {
+    const aHasKids = !collapsedNodes.has(childA) && getVisibleChildrenAsFather(childA).length > 0;
+    const bHasKids = !collapsedNodes.has(childB) && getVisibleChildrenAsFather(childB).length > 0;
+    return (aHasKids || bHasKids) ? BRANCH_GAP : SIBLING_GAP;
+  };
+
+  // Bottom-up: subtree widths
   const subtreeWidths = new Map<string, number>();
   const computeSubtreeWidth = (personId: string): number => {
     if (subtreeWidths.has(personId)) return subtreeWidths.get(personId)!;
     const wives = getVisibleWives(personId);
     const visChildren = collapsedNodes.has(personId) ? [] : getVisibleChildrenAsFather(personId);
-    
-    // Độ rộng của cụm bố mẹ
     const coupleWidth = NODE_WIDTH + wives.length * (COUPLE_GAP + NODE_WIDTH);
-    
-    // Độ rộng của các con cháu bên dưới
     let childrenWidth = 0;
-    for (let i = 0; i < visChildren.length; i++) {
-      childrenWidth += computeSubtreeWidth(visChildren[i]);
-      if (i < visChildren.length - 1) childrenWidth += SIBLING_GAP;
+    if (visChildren.length > 0) {
+      for (let i = 0; i < visChildren.length; i++) {
+        childrenWidth += computeSubtreeWidth(visChildren[i]);
+        if (i < visChildren.length - 1) {
+          childrenWidth += siblingGap(visChildren[i], visChildren[i + 1]);
+        }
+      }
     }
-    
-    const result = Math.max(coupleWidth, childrenWidth + 40); // +40 đệm an toàn
+    const result = Math.max(coupleWidth, childrenWidth);
     subtreeWidths.set(personId, result);
     return result;
   };
-  roots.forEach(root => computeSubtreeWidth(root));
+  for (const root of roots) computeSubtreeWidth(root);
 
-  // 5. GÁN TỌA ĐỘ X (Top-down)
-  const xPositions = new Map<string, number>();
-  const assignPositions = (personId: string, leftBoundary: number) => {
-    const sw = subtreeWidths.get(personId) || NODE_WIDTH;
-    const wives = getVisibleWives(personId);
-    const visChildren = collapsedNodes.has(personId) ? [] : getVisibleChildrenAsFather(personId);
-    
-    const centerX = leftBoundary + sw / 2;
-    const coupleWidth = NODE_WIDTH + wives.length * (COUPLE_GAP + NODE_WIDTH);
-    
-    // Vị trí người chồng/cha
-    const fatherX = centerX - coupleWidth / 2;
-    xPositions.set(personId, fatherX);
-    
-    // Vị trí các bà vợ
-    wives.forEach((wifeId, idx) => {
-      xPositions.set(wifeId, fatherX + (idx + 1) * (NODE_WIDTH + COUPLE_GAP));
-    });
+  // Top-down: assign X positions
+  // ═══════════════════════════════════════════════════════════════════════════
+// Bước 1: Sửa thuật toán sắp xếp tọa độ X (Khoảng dòng 400-450)
+// ═══════════════════════════════════════════════════════════════════════════
 
-    // Vị trí các con (Căn giữa theo nhánh)
-    if (visChildren.length > 0) {
-      let totalChildW = 0;
-      visChildren.forEach((cId, idx) => {
-        totalChildW += subtreeWidths.get(cId) || NODE_WIDTH;
-        if (idx < visChildren.length - 1) totalChildW += SIBLING_GAP;
-      });
-      
-      let currentChildLeft = centerX - totalChildW / 2;
-      visChildren.forEach(cId => {
-        assignPositions(cId, currentChildLeft);
-        currentChildLeft += (subtreeWidths.get(cId) || NODE_WIDTH) + SIBLING_GAP;
-      });
+// Top-down: gán tọa độ X
+const xPositions = new Map<string, number>();
+const assignPositions = (personId: string, startX: number) => {
+  const sw = subtreeWidths.get(personId) || NODE_WIDTH;
+  const wives = getVisibleWives(personId);
+  const visChildren = collapsedNodes.has(personId) ? [] : getVisibleChildrenAsFather(personId);
+  
+  // Tính độ rộng của cụm vợ chồng
+  const coupleWidth = NODE_WIDTH + wives.length * (COUPLE_GAP + NODE_WIDTH);
+  const centerX = startX + sw / 2;
+
+  // Gán tọa độ cho cụm vợ chồng
+  const fatherX = centerX - coupleWidth / 2;
+  xPositions.set(personId, fatherX);
+  
+  // Gán tọa độ cho từng bà vợ
+  let nextWifeX = fatherX + NODE_WIDTH + COUPLE_GAP;
+  for (const wifeId of wives) {
+    xPositions.set(wifeId, nextWifeX);
+    nextWifeX += NODE_WIDTH + COUPLE_GAP;
+  }
+
+  // --- MẤU CHỐT: Gán tọa độ cho con cái (Tách nhánh 1cm) ---
+  if (visChildren.length > 0) {
+    let totalChildW = 0;
+    
+    // Tính tổng độ rộng cần thiết cho các con
+    for (let i = 0; i < visChildren.length; i++) {
+      totalChildW += (subtreeWidths.get(visChildren[i]) || NODE_WIDTH);
+      if (i < visChildren.length - 1) {
+        totalChildW += siblingGap(visChildren[i], visChildren[i + 1]);
+      }
     }
-  };
+    
+    // Điểm bắt đầu vẽ con (căn giữa dưới cụm bố mẹ)
+    let childX = centerX - totalChildW / 2;
+    
+    // Duyệt qua từng đứa con để gán vị trí
+    for (let i = 0; i < visChildren.length; i++) {
+      const childId = visChildren[i];
+      
+      // Kiểm tra xem con này thuộc về gia đình của bà vợ mấy
+      const fatherId = personId;
+      const allFamiliesOfFather = fatherToFamilies.get(fatherId) || [];
+      const childFam = childToFamily.get(childId);
+      
+      let xOffset = 0; // Khoảng cách cần dịch chuyển
 
-  let currentRootLeft = 0;
-  roots.forEach(root => {
-    assignPositions(root, currentRootLeft);
-    currentRootLeft += (subtreeWidths.get(root) || NODE_WIDTH) + BRANCH_GAP;
-  });
+      if (childFam) {
+        // Tìm số thứ tự bà vợ (findIndex so sánh bằng ID)
+        const wifeIndex = allFamiliesOfFather.findIndex(fam => fam.id === childFam.id);
+        
+        // --- SỬA TẠI ĐÂY: Dịch chuyển con bà 2 trở đi ---
+        if (wifeIndex > 0) {
+          // 1cm ≈ 38px. Bạn có thể tăng giảm số này.
+          // Chúng ta dịch chuyển con sang phải.
+          xOffset = wifeIndex * 38; 
+        }
+      }
 
-  // 6. TẠO DANH SÁCH NODES
-  const minGen = Math.min(...visiblePeople.map((p) => p.generation || 0));
-  const nodes: TreeNodeData[] = visiblePeople.filter(p => xPositions.has(p.id)).map(person => ({
-    person,
-    x: xPositions.get(person.id)!,
-    y: (person.generation - minGen) * LEVEL_HEIGHT + 50,
-    isCollapsed: collapsedNodes.has(person.id),
-    hasChildren: getVisibleChildrenAsFather(person.id).length > 0,
-    isVisible: true,
-  }));
+      // Gán tọa độ cho con (startX + khoảng cách dịch chuyển)
+      assignPositions(childId, childX + xOffset);
+      
+      // Cập nhật childX cho đứa con tiếp theo
+      childX += (subtreeWidths.get(childId) || NODE_WIDTH);
+      if (i < visChildren.length - 1) {
+        childX += siblingGap(visChildren[i], visChildren[i + 1]);
+      }
+    }
+  }
+};
 
-  // 7. TẠO DANH SÁCH CONNECTIONS (Độ dày giảm dần + Tách nhánh)
+  let rootStartX = 0;
+  for (const root of roots) {
+    assignPositions(root, rootStartX);
+    rootStartX += (subtreeWidths.get(root) || NODE_WIDTH) + SIBLING_GAP * 2;
+  }
+
+  const minGen = Math.min(...visiblePeople.map((p) => p.generation || 1));
+  const nodes: TreeNodeData[] = [];
+  for (const person of visiblePeople) {
+    if (!xPositions.has(person.id)) continue;
+    nodes.push({
+      person,
+      x: xPositions.get(person.id)!,
+      y: (person.generation - minGen) * LEVEL_HEIGHT + 20,
+      isCollapsed: collapsedNodes.has(person.id),
+      hasChildren: getVisibleChildrenAsFather(person.id).length > 0,
+      isVisible: true,
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // BƯỚC 2: XỬ LÝ ĐƯỜNG KẺ - TÁCH NHÁNH TỪ MẸ & GÁN MÀU RIÊNG
+// ═══════════════════════════════════════════════════════════════════════════
+  // PHẦN LOGIC: TỰ ĐỘNG ÁP DỤNG CHO TẤT CẢ CÁC BÀ (BÀ 1, 2, 3, 4...)
+  // ═══════════════════════════════════════════════════════════════════════════
   const connections: TreeConnectionData[] = [];
   const personPos = new Map(nodes.map((n) => [n.person.id, { x: n.x, y: n.y }]));
+
+  // Danh sách màu mở rộng: Đỏ, Xanh lá, Xanh dương, Tím, Cam, Hồng đậm, Teal
   const WIFE_COLORS = ["#ef4444", "#22c55e", "#3b82f6", "#a855f7", "#f97316", "#db2777", "#0d9488"];
 
   for (const family of families) {
     const fPos = family.father_id ? personPos.get(family.father_id) : null;
     const mPos = family.mother_id ? personPos.get(family.mother_id) : null;
+    
     if (!fPos && !mPos) continue;
 
-    // Đường nối Vợ - Chồng
+    // Vẽ đường hồng nối vợ chồng (Couple line)
     if (fPos && mPos) {
       connections.push({
         id: `couple-${family.id}`,
-        x1: fPos.x + NODE_WIDTH, y1: fPos.y + NODE_HEIGHT / 2,
-        x2: mPos.x, y2: mPos.y + NODE_HEIGHT / 2,
-        type: 'couple', isVisible: true,
+        x1: Math.min(fPos.x, mPos.x) + NODE_WIDTH,
+        y1: fPos.y + NODE_HEIGHT / 2,
+        x2: Math.max(fPos.x, mPos.x),
+        y2: mPos.y + NODE_HEIGHT / 2,
+        type: 'couple',
+        isVisible: true,
       });
     }
 
-    // Đường nối Con cái (Màu theo bà mẹ & Độ dày giảm dần)
-    const fatherFams = fatherToFamilies.get(family.father_id || '') || [];
-    const wifeIndex = fatherFams.findIndex(f => f.id === family.id);
-    
-    // Tách điểm rơi dây (mỗi bà một vị trí x1 khác nhau)
-    const wireOffset = (wifeIndex - (fatherFams.length - 1) / 2) * 30;
-    const anchorX = mPos ? (mPos.x + NODE_WIDTH / 2) + wireOffset : (fPos ? fPos.x + NODE_WIDTH / 2 + wireOffset : 0);
-    const anchorY = mPos ? mPos.y + NODE_HEIGHT : (fPos ? fPos.y + NODE_HEIGHT : 0);
+    if ((family.father_id && collapsedNodes.has(family.father_id)) ||
+        (!family.father_id && family.mother_id && collapsedNodes.has(family.mother_id))) continue;
 
-    children.filter(c => c.family_id === family.id).forEach(child => {
-      const childPos = personPos.get(child.person_id);
-      if (childPos && !((family.father_id && collapsedNodes.has(family.father_id)))) {
-        connections.push({
-          id: `child-${family.id}-${child.person_id}`,
-          x1: anchorX, y1: anchorY,
-          x2: childPos.x + NODE_WIDTH / 2, y2: childPos.y,
-          type: 'parent-child',
-          color: WIFE_COLORS[wifeIndex % WIFE_COLORS.length],
-          wifeIndex: wifeIndex, // Để dùng trong TreeConnection
-          isVisible: true,
-        } as any);
+    // --- TỰ ĐỘNG XÁC ĐỊNH MÀU VÀ ĐỘ DÀY CHO N BÀ VỢ ---
+    let wifeColor = "#9ca3af"; 
+    let isFirstWife = false;
+    let wifeIndex = 0;
+    
+    if (family.father_id) {
+      const allFams = fatherToFamilies.get(family.father_id) || [];
+      wifeIndex = allFams.findIndex(f => f.id === family.id);
+      
+      if (wifeIndex !== -1) {
+        // Lấy màu xoay vòng trong danh sách WIFE_COLORS
+        wifeColor = WIFE_COLORS[wifeIndex % WIFE_COLORS.length];
+        // Chỉ bà đầu tiên (index 0) mới có nét to
+        isFirstWife = (wifeIndex === 0);
       }
-    });
+    }
+
+    // MẤU CHỐT: Điểm rụng (x1) tách biệt cho từng bà
+    // Mỗi bà vợ cách nhau một khoảng offset để đường kẻ rụng xuống không đè lên nhau
+    const anchorX = mPos 
+      ? (mPos.x + NODE_WIDTH / 2) 
+      : (fPos ? fPos.x + NODE_WIDTH / 2 : 0);
+    
+    const anchorY = mPos ? mPos.y : (fPos ? fPos.y : 0);
+
+    children
+      .filter((c) => c.family_id === family.id)
+      .forEach((child) => {
+        const childPos = personPos.get(child.person_id);
+        if (childPos) {
+          connections.push({
+            id: `child-${family.id}-${child.person_id}`,
+            x1: anchorX,               // Đường kẻ rụng từ đúng vị trí bà mẹ đó
+            y1: anchorY + NODE_HEIGHT, 
+            x2: childPos.x + NODE_WIDTH / 2,
+            y2: childPos.y,
+            type: 'parent-child',
+            isVisible: true,
+            color: wifeColor,          // Màu riêng của từng bà (1, 2, 3...)
+            isWife1: isFirstWife,      // Độ dày riêng cho bà 1
+          } as any);
+        }
+      });
   }
 
-  // 8. Tính toán kích thước tổng thể
-  let minX = Math.min(...nodes.map(n => n.x)), maxX = Math.max(...nodes.map(n => n.x + NODE_WIDTH));
-  let maxY = Math.max(...nodes.map(n => n.y + NODE_HEIGHT));
+  // Bounds
+  let minX = Infinity, maxX = -Infinity, maxY = 0;
+  for (const n of nodes) {
+    minX = Math.min(minX, n.x);
+    maxX = Math.max(maxX, n.x + NODE_WIDTH);
+    maxY = Math.max(maxY, n.y + NODE_HEIGHT);
+  }
+  if (!isFinite(minX)) { minX = 0; maxX = 0; }
 
-  return { nodes, connections, width: maxX - minX + 200, height: maxY + 200, offsetX: -minX + 100 };
+  return {
+    nodes,
+    connections,
+    width: maxX - minX + 100,
+    height: maxY + 50,
+    offsetX: -minX + 50,
+  };
 }
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Main Family Tree Component
 // ═══════════════════════════════════════════════════════════════════════════
